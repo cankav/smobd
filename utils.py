@@ -1,5 +1,6 @@
 import random
 import numpy as np
+import json
 
 def random_init_X(n):
     # Generate sensible random X
@@ -24,8 +25,10 @@ def random_init_X(n):
     X[p_m+p_s:p_m+sensible_range+p_s] = ask_orders
     return (X)
 
+
 class UnknownPriceException(Exception):
     pass
+
 
 def get_lambda(i):
     if i == 1:
@@ -39,7 +42,9 @@ def get_lambda(i):
     elif i == 5:
         return 0.77
     else:
-        raise UnknownPriceException('unknown i')
+        return 0.01
+        #raise UnknownPriceException('unknown i')
+
 
 def get_theta(i):
     if i == 1:
@@ -53,99 +58,155 @@ def get_theta(i):
     elif i == 5:
         return 0.47
     else:
-        raise UnknownPriceException('unknown i')
+        return 0.01
+        #raise UnknownPriceException('unknown i')
+
 
 def get_mu():
     return 0.94
 
+
 def get_k():
     return 1.92
+
 
 def get_alpha():
     return 0.52
 
-def get_best_ask_bid_order_num(X):
-    [p_A_ind, p_B_ind] = get_best_ask_bid_ind(X)
-    p_A = X[p_A_ind]
-    p_B = X[p_B_ind]
-    return [p_A, p_B]
 
-def get_best_ask_bid_ind(X):
-    p_A_ind = np.where(X>0)[0][0]
-    p_B_ind = np.where(X<0)[0][-1]
-    return [p_A_ind, p_B_ind]
+def get_ask_bid_price(X):
+    # returns best ask and bid price given state X
+    # p_A and p_B are defined as indices of X
+    p_A = np.where(X>0)[0][0]
+    p_B = np.where(X<0)[0][-1]
+    return [p_A, p_B]
 
 # TODO: add admissibility check
 
-def simulate_order_book(n_steps, X):
-    # gibbs sampling with independent factors
-    for step in range(n_steps):
-        # limit buy order
-        # x -> x^(p-1)
-        [p_A_ind, p_B_ind] = get_best_ask_bid_ind(X)
-        for p in range(p_A_ind):
-            try:
-                X[p] -= np.random.poisson(get_lambda(p))
 
-                # buy orders can not be positive
-                if X[p] > 0:
-                    X[p] = 0
-            except UnknownPriceException:
-                pass
+def get_rates(X):
+    # sum all possible event rates
 
-        # limit sell order
-        # x -> x^(p+1)
-        [p_A_ind, p_B_ind] = get_best_ask_bid_ind(X)
-        for p in range(p_B_ind+1, len(X)):
-            try:
-                X[p] += np.random.poisson(get_lambda(p))
+    [p_A, p_B] = get_ask_bid_price(X)
+    n = len(X)
 
-                # sell orders can not be negative
-                if X[p] < 0:
-                    X[p] = 0                
-            except UnknownPriceException:
-                pass
+    nnz_rates = []
+    sum_rates = 0
 
-        # market buy order
-        # x -> x^(p_B(t)+1)
-        [p_A_ind, p_B_ind] = get_best_ask_bid_ind(X)
-        X[p_A_ind] += np.random.poisson(get_mu())
-        # sell orders can not be negative
-        if X[p_A_ind] < 0:
-            X[p_A_ind] = 0                
+    # limit buy order
+    # x -> x^(p-1)
+    for relative_p in range(1, p_A+1):
+        rate = get_lambda(relative_p)
+        sum_rates += rate
+        if rate:
+            nnz_rates.append(('limitbuy', p_A-relative_p, rate))
 
-        # market sell order
-        # x -> x^(p_A(t)-1)
-        [p_A_ind, p_B_ind] = get_best_ask_bid_ind(X)
-        X[p_B_ind] -= np.random.poisson(get_mu())
-        # buy orders can not be positive
-        if X[p] > 0:
-            X[p] = 0
+    # limit sell order
+    # x -> x^(p+1)
+    for relative_p in range(1, n-p_B-1):
+        rate = get_lambda(relative_p)
+        sum_rates += rate
+        if rate:
+            nnz_rates.append(('limitsell', p_B+relative_p, rate))
 
-        # cancel limit buy order
-        # x -> x^(p+1)
-        [p_A_ind, p_B_ind] = get_best_ask_bid_ind(X)
-        for p in range(p_A_ind):
-            try:
-                X[p] += np.random.poisson(get_theta(p)*abs(X[p]))
+    # market buy order
+    # x -> x^(p_A(t)+1)
+    sum_rates += get_mu()
+    nnz_rates.append(('marketbuy', p_A, get_mu()))
 
-                # buy orders can not be positive
-                if X[p] > 0:
-                    X[p] = 0
-            except UnknownPriceException:
-                pass
+    # market sell order
+    # x -> x^(p_B(t)-1)
+    sum_rates += get_mu()
+    nnz_rates.append(('marketsell', p_B, get_mu()))
 
-        # cancel limit sell order
-        # x -> x^(p+1)
-        [p_A_ind, p_B_ind] = get_best_ask_bid_ind(X)
-        for p in range(p_B_ind+1, len(X)):
-            try:
-                X[p] -= np.random.poisson(get_theta(p)*X[p])
+    # cancel limit buy order
+    # x -> x^(p+1)
+    for relative_p in range(1, p_A+1):
+        # can not issue cancel order unless there is existing limit order in p
+        if abs(X[p_A-relative_p]):
+            rate = get_theta(relative_p) * abs(X[p_A-relative_p])
+            sum_rates += rate
+            if rate:
+                nnz_rates.append(('cancellimitbuy', p_A-relative_p, rate))
 
-                # sell orders can not be negative
-                if X[p] < 0:
-                    X[p] = 0
-            except UnknownPriceException:
-                pass
+    # cancel limit sell order
+    # x -> x^(p+1)
+    for relative_p in range(1, n-p_B-1):
+        # can not issue cancel order unless there is existing limit order in p
+        if abs(X[p_B+relative_p]):
+            rate = get_theta(relative_p) * abs(X[p_B+relative_p])
+            sum_rates += rate
+            if rate:
+                nnz_rates.append(('cancellimitsell', p_B+relative_p, rate))
 
-    return X
+    return (sum_rates, nnz_rates)
+
+
+def print_execution_error(error_str, event, state):
+    [p_A, p_B] = get_ask_bid_price(state)
+    return ('%s p_A %s p_B %s event %s state \n%s' %(error_str, p_A, p_B, event, state))
+
+def execute_event(event, state, order_size=1):
+    event_type = event[0]
+    event_price = event[1]
+
+    if event_type == 'limitbuy':
+        assert state[event_price] <= 0, print_execution_error('limit buy orders must not arrive at positive quotes', event, state)
+        state[event_price] -= order_size
+    elif event_type == 'limitsell':
+        assert state[event_price] >= 0, print_execution_error('limit sell orders must not arrive at negative quotes', event, state)
+        state[event_price] += order_size
+    elif event_type == 'marketbuy':
+        assert state[event_price] > 0, print_execution_error('best ask price quotes must be positive', event, state)
+        state[event_price] -= order_size
+    elif event_type == 'marketsell':
+        assert state[event_price] < 0, print_execution_error('best sell price quotes must be negative', event, state)
+        state[event_price] += order_size
+    elif event_type == 'cancellimitbuy':
+        assert state[event_price] < 0, print_execution_error('cancel limit buy orders must not arrive at positive quotes', event, state)
+        state[event_price] += order_size
+    elif event_type == 'cancellimitsell':
+        assert state[event_price] > 0, print_execution_error('cancel limit sell orders must not arrive at negative quotes', event, state)
+        state[event_price] -= order_size
+    else:
+        raise Exception('programming error: unknown event_type for event: %s' %event)
+
+    return state
+
+
+def simulate_order_book(event_num, initial_X):
+    n = len(initial_X)
+    state = initial_X
+    state_str = json.dumps(list(initial_X))
+
+    clock = 0
+    all_states = {}
+
+    for event in range(event_num):
+        (sum_rates, nnz_rates) = get_rates(state)
+
+        # pick next event time
+        tau = np.random.exponential(1/sum_rates)
+
+        if state_str not in all_states:
+            all_states[state_str] = tau
+        else:
+            all_states[state_str] += tau
+
+        # pick next event type
+        rand_event_p = np.random.uniform() * sum_rates
+        event = None
+        for nnz_rate in nnz_rates:
+            rand_event_p -= nnz_rate[2]
+            if rand_event_p <= 0:
+                event = nnz_rate
+                break
+
+        assert event, 'event can not be none'
+
+        state = execute_event(event, state)
+        state_str = json.dumps(list(state))
+
+        clock += tau
+
+    return all_states

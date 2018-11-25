@@ -1,4 +1,9 @@
 import numpy as np
+'''
+Use Gillespie algorithm to implement death-birth process
+# Reference: https://pdfs.semanticscholar.org/f70e/d6c71bc4a7fa5f4584b8616187b73ade644d.pdf
+'''
+
 
 EVENT_NUM=100000
 
