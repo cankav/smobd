@@ -156,7 +156,7 @@ def print_execution_error(error_str, event, state):
     [p_A, p_B] = get_ask_bid_price(state)
     return ('%s p_A %s p_B %s event %s state \n%s' %(error_str, p_A, p_B, event, state))
 
-def execute_event(event, state, order_size=1):
+def execute_event(event, state, order_size=0.5):
     event_type = event[0]
     event_price = event[1]
 

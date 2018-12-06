@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 import sys
 import json
 
-n=400
+n=500
 
 random.seed(0)
 np.random.seed(0)
@@ -16,7 +16,7 @@ X=random_init_X(n)
 
 print(X)
 
-(all_states, Q_i) = simulate_order_book(pow(10,4), X)
+(all_states, Q_i) = simulate_order_book(pow(10,6), X)
 all_tau = sum(all_states.values())
 
 states_with_highest_p_num = 5
