@@ -1,6 +1,7 @@
 import random
 import numpy as np
 import json
+import math
 
 def random_init_X(n):
     # Generate sensible random X
@@ -14,8 +15,12 @@ def random_init_X(n):
     # pick sensible spread size
     p_s = 1 #random.randint(1,sensible_range)
 
-    max_order_size = 1000
-    orders = np.array( random.sample(range(max_order_size), 2*sensible_range) )
+    min_order_size = 0
+    max_order_size = 2
+    orders = []
+    for i in range(2*sensible_range):
+        orders.append(int(random.random()*(max_order_size-min_order_size)+min_order_size))
+    orders = np.array(orders)
 
     bid_orders = -1 * orders[0:int(len(orders)/2)]
     ask_orders = orders[int(len(orders)/2):]
@@ -42,7 +47,11 @@ def get_lambda(i):
     elif i == 5:
         return 0.77
     else:
-        return 0.01
+        return 0.001
+        # if i > 30:
+        #     return 0.0001
+        # else:
+        #     return 0.77-((i-5)*((0.77-0.001)/25))
         #raise UnknownPriceException('unknown i')
 
 
@@ -58,7 +67,11 @@ def get_theta(i):
     elif i == 5:
         return 0.47
     else:
-        return 0.01
+        return 0.001
+        # if i > 30:
+        #     return 0.0001
+        # else:
+        #     return 0.47-((i-5)*((0.47-0.001)/25))
         #raise UnknownPriceException('unknown i')
 
 
@@ -86,6 +99,7 @@ def get_ask_bid_price(X):
 
 def get_rates(X):
     # sum all possible event rates
+    # TODO: convert nnz_rates to dictionary
 
     [p_A, p_B] = get_ask_bid_price(X)
     n = len(X)
@@ -103,7 +117,7 @@ def get_rates(X):
 
     # limit sell order
     # x -> x^(p+1)
-    for relative_p in range(1, n-p_B-1):
+    for relative_p in range(1, n-p_B):
         rate = get_lambda(relative_p)
         sum_rates += rate
         if rate:
@@ -122,22 +136,18 @@ def get_rates(X):
     # cancel limit buy order
     # x -> x^(p+1)
     for relative_p in range(1, p_A+1):
-        # can not issue cancel order unless there is existing limit order in p
-        if abs(X[p_A-relative_p]):
-            rate = get_theta(relative_p) * abs(X[p_A-relative_p])
-            sum_rates += rate
-            if rate:
-                nnz_rates.append(('cancellimitbuy', p_A-relative_p, rate))
+        rate = get_theta(relative_p) * abs(X[p_A-relative_p])
+        sum_rates += rate
+        if rate:
+            nnz_rates.append(('cancellimitbuy', p_A-relative_p, rate))
 
     # cancel limit sell order
     # x -> x^(p+1)
-    for relative_p in range(1, n-p_B-1):
-        # can not issue cancel order unless there is existing limit order in p
-        if abs(X[p_B+relative_p]):
-            rate = get_theta(relative_p) * abs(X[p_B+relative_p])
-            sum_rates += rate
-            if rate:
-                nnz_rates.append(('cancellimitsell', p_B+relative_p, rate))
+    for relative_p in range(1, n-p_B):
+        rate = get_theta(relative_p) * abs(X[p_B+relative_p])
+        sum_rates += rate
+        if rate:
+            nnz_rates.append(('cancellimitsell', p_B+relative_p, rate))
 
     return (sum_rates, nnz_rates)
 
@@ -150,43 +160,54 @@ def execute_event(event, state, order_size=1):
     event_type = event[0]
     event_price = event[1]
 
+    new_state = state
     if event_type == 'limitbuy':
         assert state[event_price] <= 0, print_execution_error('limit buy orders must not arrive at positive quotes', event, state)
-        state[event_price] -= order_size
+        new_state[event_price] -= order_size
     elif event_type == 'limitsell':
         assert state[event_price] >= 0, print_execution_error('limit sell orders must not arrive at negative quotes', event, state)
-        state[event_price] += order_size
+        new_state[event_price] += order_size
     elif event_type == 'marketbuy':
         assert state[event_price] > 0, print_execution_error('best ask price quotes must be positive', event, state)
-        state[event_price] -= order_size
+        new_state[event_price] -= order_size
     elif event_type == 'marketsell':
         assert state[event_price] < 0, print_execution_error('best sell price quotes must be negative', event, state)
-        state[event_price] += order_size
+        new_state[event_price] += order_size
     elif event_type == 'cancellimitbuy':
         assert state[event_price] < 0, print_execution_error('cancel limit buy orders must not arrive at positive quotes', event, state)
-        state[event_price] += order_size
+        new_state[event_price] += order_size
     elif event_type == 'cancellimitsell':
         assert state[event_price] > 0, print_execution_error('cancel limit sell orders must not arrive at negative quotes', event, state)
-        state[event_price] -= order_size
+        new_state[event_price] -= order_size
     else:
         raise Exception('programming error: unknown event_type for event: %s' %event)
 
-    return state
+    return new_state
 
 
-def simulate_order_book(event_num, initial_X):
+def simulate_order_book(event_counter, initial_X):
     n = len(initial_X)
     state = initial_X
     state_str = json.dumps(list(initial_X))
 
     clock = 0
     all_states = {}
+    Q_i = [0]*n
+    Q_i_counter = 0
 
-    for event in range(event_num):
+    limit_order_counter = 0
+    cancel_limit_order_counter = 0
+    market_order_counter = 0
+    all_sum_rates = []
+    all_taos = []
+    for event_index in range(event_counter):
         (sum_rates, nnz_rates) = get_rates(state)
+        all_sum_rates.append(sum_rates)
 
         # pick next event time
-        tau = np.random.exponential(1/sum_rates)
+        # tau = np.random.exponential(1/sum_rates)
+        tau = 1/sum_rates * np.log(1/np.random.uniform())
+        all_taos.append(tau)
 
         if state_str not in all_states:
             all_states[state_str] = tau
@@ -204,9 +225,53 @@ def simulate_order_book(event_num, initial_X):
 
         assert event, 'event can not be none'
 
+        [p_A, p_B] = get_ask_bid_price(state)
+        event_type = event[0]
+        event_price = event[1]
+        if event_type in ['limitbuy', 'cancellimitbuy']:
+            best_quote = p_A
+            assert best_quote > event_price, 'limitbuy or cancellimitbuy quote can not have price %s larger than best ask price %s event %s' %(event_price, p_A, event)
+        elif event_type in ['limitsell', 'cancellimitsell']:
+            best_quote = p_B
+            assert best_quote < event_price, 'limitsell or cancellimitsell quote can not have price %s less than best bid price %s event %s' %(event_price, p_A, event)
+        else:
+            best_quote = None
+
+        if event_type in ['cancellimitbuy', 'cancellimitsell']:
+            cancel_limit_order_counter += 1
+        elif event_type in ['limitbuy', 'limitsell']:
+            limit_order_counter += 1
+        elif event_type in ['marketbuy', 'marketsell']:
+            market_order_counter += 1
+
+
+        #sum should be in integer groups of tau
+            
+        if best_quote:
+            #Q_i[abs(best_quote-event_price)] += abs(state[event_price])
+            for i in range(1, 30):
+                # number of buy orders at a distance i from the ask
+                q_i_B = abs(state[p_A-i])
+                # number of sell orders at a distance i from the bid
+                q_i_A = state[p_B+i]
+
+                #state_debug_str = ''
+                # for s_i, s in enumerate(state):
+                #     state_debug_str += '%s: %s\n' %(s_i, s)
+                assert q_i_B >= 0 and q_i_A >= 0, 'q_i_A and q_i_B must be larger than zero! i %s p_A %s p_B %s q_i_B %s q_i_A %s event %s state %s' %(i, p_A, p_B, q_i_B,q_i_A,event, state)
+
+                Q_i[i] += q_i_B+q_i_A
+            Q_i_counter += 2
+
         state = execute_event(event, state)
         state_str = json.dumps(list(state))
 
         clock += tau
 
-    return all_states
+    for q_i, q in enumerate(Q_i):
+        Q_i[q_i] /= Q_i_counter # (limit_order_counter+cancel_limit_order_counter)
+
+    print('limit_order_counter %s cancel_limit_order_counter %s market_order_counter %s' %(limit_order_counter, cancel_limit_order_counter, market_order_counter))
+    print('all_sum_rates %s' %all_sum_rates)
+    print('all_taos %s' %all_taos)
+    return (all_states, Q_i)
