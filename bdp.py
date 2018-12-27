@@ -5,7 +5,7 @@ Use Gillespie algorithm to implement death-birth process
 '''
 
 
-EVENT_NUM=100000
+EVENT_NUM=10000
 
 state = 0
 

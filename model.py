@@ -16,7 +16,7 @@ X=random_init_X(n)
 
 print(X)
 
-(all_states, Q_i) = simulate_order_book(pow(10,6), X)
+(all_states, Q_i, RV) = simulate_order_book(pow(10,6), X)
 all_tau = sum(all_states.values())
 
 states_with_highest_p_num = 5
@@ -32,6 +32,7 @@ for state in all_states:
     # state = np.array(json.loads(state))
 
 print('Q_i %s' %Q_i)
+print('RV %s' %RV)
 
 print('states_with_highest_p')
 for s in states_with_highest_p:

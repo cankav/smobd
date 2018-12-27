@@ -3,6 +3,8 @@ import numpy as np
 import json
 import math
 
+# TODO: add admissibility check
+
 def random_init_X(n):
     # Generate sensible random X
 
@@ -87,14 +89,18 @@ def get_alpha():
     return 0.52
 
 
+def get_mid_price(X):
+    [p_A, p_B] = get_ask_bid_price(X)
+    # rounding with int ok?
+    return (p_A + p_B) / 2
+
+
 def get_ask_bid_price(X):
     # returns best ask and bid price given state X
     # p_A and p_B are defined as indices of X
     p_A = np.where(X>0)[0][0]
     p_B = np.where(X<0)[0][-1]
     return [p_A, p_B]
-
-# TODO: add admissibility check
 
 
 def get_rates(X):
@@ -156,7 +162,7 @@ def print_execution_error(error_str, event, state):
     [p_A, p_B] = get_ask_bid_price(state)
     return ('%s p_A %s p_B %s event %s state \n%s' %(error_str, p_A, p_B, event, state))
 
-def execute_event(event, state, order_size=0.5):
+def execute_event(event, state, order_size=1):
     event_type = event[0]
     event_price = event[1]
 
@@ -200,6 +206,9 @@ def simulate_order_book(event_counter, initial_X):
     market_order_counter = 0
     all_sum_rates = []
     all_taos = []
+    p_m_current = get_mid_price(initial_X)
+    volatility_price_change_num = 370
+    RV = 0
     for event_index in range(event_counter):
         (sum_rates, nnz_rates) = get_rates(state)
         all_sum_rates.append(sum_rates)
@@ -266,7 +275,18 @@ def simulate_order_book(event_counter, initial_X):
         state = execute_event(event, state)
         state_str = json.dumps(list(state))
 
+        p_m_new = get_mid_price(state)
+        if p_m_new != p_m_current:
+            if volatility_price_change_num != 0:
+                volatility_price_change_num -= 1
+                RV += pow( np.log( p_m_new / p_m_current ), 2)
+                p_m_current = p_m_new
+
         clock += tau
+
+        if volatility_price_change_num == 0:
+            print( 'volatility_price_change_num == 0 break event_index %s' %event_index )
+            #break
 
     for q_i, q in enumerate(Q_i):
         Q_i[q_i] /= Q_i_counter # (limit_order_counter+cancel_limit_order_counter)
@@ -274,4 +294,5 @@ def simulate_order_book(event_counter, initial_X):
     print('limit_order_counter %s cancel_limit_order_counter %s market_order_counter %s' %(limit_order_counter, cancel_limit_order_counter, market_order_counter))
     print('all_sum_rates %s' %all_sum_rates)
     print('all_taos %s' %all_taos)
-    return (all_states, Q_i)
+    print('volatility_price_change_num %s' %volatility_price_change_num)
+    return (all_states, Q_i, np.sqrt(RV))
